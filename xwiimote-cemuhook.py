@@ -145,6 +145,10 @@ class WiiDevice:
             ecodes.EV_ABS: [
                 ecodes.ABS_X,
                 ecodes.ABS_Y,
+                ecodes.ABS_RX,
+                ecodes.ABS_RY,
+                ecodes.ABS_HAT0X,
+                ecodes.ABS_HAT0Y
             ]
         }
         self.ui = UInput(cap, name="xwiimote controller 1", version=0x1, phys=self.serial)
@@ -253,7 +257,17 @@ class WiiDevice:
                             self.state[ps_key] = 0xFF if state else 0x00
                         
                         #print(self.state)
-                        self.ui.write(ecodes.EV_KEY, ecodes.ecodes[self.mapping.get(xwiimote_keymap.get(code))], state)
+                        if self.mapping.get(xwiimote_keymap.get(code)).startswith("BTN_DPAD"):
+                            if self.mapping.get(xwiimote_keymap.get(code)) == "BTN_DPAD_UP":
+                                self.ui.write(ecodes.EV_ABS, ecodes.ecodes["ABS_HAT0Y"], -1 * 32767 * state)
+                            elif self.mapping.get(xwiimote_keymap.get(code)) == "BTN_DPAD_DOWN":
+                                self.ui.write(ecodes.EV_ABS, ecodes.ecodes["ABS_HAT0Y"], 1 * 32767 * state)
+                            elif self.mapping.get(xwiimote_keymap.get(code)) == "BTN_DPAD_LEFT":
+                                self.ui.write(ecodes.EV_ABS, ecodes.ecodes["ABS_HAT0X"], -1 * 32767 * state)
+                            elif self.mapping.get(xwiimote_keymap.get(code)) == "BTN_DPAD_RIGHT":
+                                self.ui.write(ecodes.EV_ABS, ecodes.ecodes["ABS_HAT0X"], 1 * 32767 * state)
+                        else:
+                            self.ui.write(ecodes.EV_KEY, ecodes.ecodes[self.mapping.get(xwiimote_keymap.get(code))], state)
                     elif evt.type == xwiimote.EVENT_ACCEL:
                         x, y, z = evt.get_abs(0)
                         if self.extension == "none":
