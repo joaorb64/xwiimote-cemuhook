@@ -62,8 +62,11 @@ class BaseMessage(bytearray):
         self[8:12] = struct.pack('<I', crc)
 
 class Message(BaseMessage):
-    def __init__(self, message_type, device, data=[0]):
-        index = getattr(device, 'index', device) & 0xff
+    def __init__(self, message_type, device, data=[0], device_index=None):
+        if device_index:
+            index = device_index & 0xff
+        else:
+            index = getattr(device, 'index', device) & 0xff
 
         # Shared response for ports and data messages
         data = [
@@ -136,7 +139,10 @@ class WiiDevice:
             "accel_z": None,
             "motion_x": None,
             "motion_y": None,
-            "motion_z": None
+            "motion_z": None,
+            "accel_x2": None,
+            "accel_y2": None,
+            "accel_z2": None
         }
 
         cap = {
@@ -164,6 +170,8 @@ class WiiDevice:
 
         self.state.update(accel_x=0.0, accel_y=0.0, accel_z=0.0,
                           motion_x=0.0, motion_y=0.0, motion_z=0.0)
+        
+        self.state.update(accel_x2=0.0, accel_y2=0.0, accel_z2=0.0)
 
         self.battery = None
 
@@ -259,13 +267,13 @@ class WiiDevice:
                         #print(self.state)
                         if self.mapping.get(xwiimote_keymap.get(code)).startswith("BTN_DPAD"):
                             if self.mapping.get(xwiimote_keymap.get(code)) == "BTN_DPAD_UP":
-                                self.ui.write(ecodes.EV_ABS, ecodes.ecodes["ABS_HAT0Y"], -1 * 32767 * state)
+                                self.ui.write(ecodes.EV_ABS, ecodes.ecodes["ABS_RY"], -1 * 32767 * state)
                             elif self.mapping.get(xwiimote_keymap.get(code)) == "BTN_DPAD_DOWN":
-                                self.ui.write(ecodes.EV_ABS, ecodes.ecodes["ABS_HAT0Y"], 1 * 32767 * state)
+                                self.ui.write(ecodes.EV_ABS, ecodes.ecodes["ABS_RY"], 1 * 32767 * state)
                             elif self.mapping.get(xwiimote_keymap.get(code)) == "BTN_DPAD_LEFT":
-                                self.ui.write(ecodes.EV_ABS, ecodes.ecodes["ABS_HAT0X"], -1 * 32767 * state)
+                                self.ui.write(ecodes.EV_ABS, ecodes.ecodes["ABS_RX"], -1 * 32767 * state)
                             elif self.mapping.get(xwiimote_keymap.get(code)) == "BTN_DPAD_RIGHT":
-                                self.ui.write(ecodes.EV_ABS, ecodes.ecodes["ABS_HAT0X"], 1 * 32767 * state)
+                                self.ui.write(ecodes.EV_ABS, ecodes.ecodes["ABS_RX"], 1 * 32767 * state)
                         else:
                             self.ui.write(ecodes.EV_KEY, ecodes.ecodes[self.mapping.get(xwiimote_keymap.get(code))], state)
                     elif evt.type == xwiimote.EVENT_ACCEL:
@@ -330,7 +338,9 @@ class WiiDevice:
                         
                         # Accelerometer
                         x, y, z = evt.get_abs(1)
-                        #print((x+25)/200, y/200, z/200)
+                        self.state['accel_x2'] = (x+25)/200
+                        self.state['accel_y2'] = (y)/200
+                        self.state['accel_z2'] = (z)/200
                     elif evt.type == xwiimote.EVENT_MOTION_PLUS:
                         x, y, z = evt.get_abs(0)
                         if self.extension == "none":
@@ -358,12 +368,10 @@ class WiiDevice:
             print_verbose("Input events task ended")
     
     async def _get_battery_level(self):
-        print("battery")
         print_verbose("Battery level reading thread started")
         try:
             while self.device != None:
                 battery_percent = self.device.get_battery()
-                print(battery_percent)
                 if battery_percent != self.battery:
                     print_verbose("Battery level changed")
                     self.battery = battery_percent
@@ -417,10 +425,14 @@ class UDPServer:
 
     def _res_ports(self, index):
         device = self.slots[index]
+        
         if device is None:
-            device = index
+            if self.slots[index-1] is not None and self.slots[index-1].extension == "nunchuk":
+                device = self.slots[index-1]
+            else:
+                device = index
 
-        return Message('ports', device)
+        return Message('ports', device, device_index=index)
 
     def _req_ports(self, message, address):
         requests_count = struct.unpack("<I", message[20:24])[0]
@@ -486,22 +498,35 @@ class UDPServer:
         else:
             print('[udp] Unknown message type: ' + str(msg_type))
 
-    def report(self, device):
+    def report(self, device, nunchuk=False):
         device_state = device.report
 
-        # Acceleration in g's
-        sensors = [
-            device_state.get('accel_x'),
-            -device_state.get('accel_z'),
-            -device_state.get('accel_y'),
-        ]
+        if not nunchuk:
+            # Acceleration in g's
+            sensors = [
+                device_state.get('accel_x'),
+                -device_state.get('accel_z'),
+                -device_state.get('accel_y'),
+            ]
 
-        # Gyro rotation in deg/s
-        sensors.extend([
-            -device_state.get('motion_z'),
-            -device_state.get('motion_x'),
-            -device_state.get('motion_y')
-        ])
+            # Gyro rotation in deg/s
+            sensors.extend([
+                -device_state.get('motion_z'),
+                -device_state.get('motion_x'),
+                -device_state.get('motion_y')
+            ])
+        else:
+            # Acceleration in g's
+            sensors = [
+                device_state.get('accel_x2'),
+                -device_state.get('accel_z2'),
+                -device_state.get('accel_y2'),
+            ]
+
+            # Gyro rotation in deg/s
+            sensors.extend([
+                0, 0, 0
+            ])
 
         buttons1 = 0x00
         buttons1 |= int(abs_to_button(device_state.get("button_share", 0x00))/255)
@@ -570,7 +595,10 @@ class UDPServer:
 
         self.counter += 1
 
-        self._res_data(device.index, Message('data', device, data))
+        self._res_data(device.index if not nunchuk else device.index+1, Message('data', device, data, device_index=(device.index+1 if nunchuk else None)))
+
+        if not nunchuk and device.extension == "nunchuk":
+            self.report(device, True)
     
     def report_clean(self, device):
         self._res_data(device.index, Message('data', device))
@@ -603,7 +631,10 @@ class UDPServer:
 
         for i, slot in enumerate(self.slots):
             if not slot:
-                print(str(i+1)+" ❎ ")
+                if self.slots[i-1] is not None and self.slots[i-1].extension == "nunchuk":
+                    print(str(i+1)+" ↳ nunchuk motion")
+                else:
+                    print(str(i+1)+" ❎ ")
             else:
                 device = str(i+1)+" "
                 device += slot.name
@@ -628,7 +659,11 @@ class UDPServer:
         print(colored("".center(55, "="), attrs=["bold"]))
 
     def connected_devices(self):
-        return sum(d is not None for d in self.slots)
+        ret = 0
+        for d in self.slots:
+            if d is not None and d.extension != "nunchuk": ret += 1
+            if d is not None and d.extension == "nunchuk": ret += 2
+        return ret
 
     def _worker(self):
         while not self.stop_event.is_set():
